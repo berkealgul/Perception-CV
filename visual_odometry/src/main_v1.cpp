@@ -12,12 +12,12 @@
 using namespace cv;
 using namespace std;
 
-#define MIN_FEAS 800
-#define FastConst 20
+#define MIN_FEAS 1000
+#define FastConst 30
 
 
 // TODO : Consider speed's position in code
-float speed = 0; //Speed of the camera
+float speed = 1; //Speed of the camera
 float sx = 0;
 float sy = 0;
 float sz = 0;
@@ -32,8 +32,7 @@ class Camera
 	Mat prevImg, dist, mtx;
 	std::vector<Point2f> prevFeatures;
 	float focal;
-	bool first = true;
-
+	bool first;
 	Mat getFrame()
 	{
 	    Mat rawFrame, grayFrame, finalFrame;
@@ -59,6 +58,7 @@ class Camera
 
 		if (prevFeatures.size() < MIN_FEAS)
 		{
+			std::cout << "LOW FEATURES!!\n";
 			detectFeatures(prevImg, prevFeatures);
 			tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
 		}
@@ -114,7 +114,10 @@ class Camera
 
 	Camera(Mat _mtx, Mat _dist)
 	{
-	    cap.open(1);
+		R = Mat_<double>(3,3);
+	    T = Mat_<double>(3,1);
+
+	    cap.open(0);
 	    mtx = _mtx;
 	    dist = _dist;
 
@@ -129,14 +132,22 @@ class Camera
 
 	    pp = Point2d(cx, cy);
 	    focal = fx / w;
+
+	    first = true;
 	}
 
 	void update(float speed)
 	{	
+		// Check camera status before prosecure
+		if (!cap.isOpened())
+		{
+			std::cout << "Camera is not open!!!!\n";
+			return;
+		}
 
         Mat frame = getFrame();
 
-        drawFeatures(frame);
+        //TODO : refind features and draw them for demostration purposes
 		imshow("frame", frame);
 
 	    if(speed <= 0.1)
@@ -145,12 +156,15 @@ class Camera
 	        return;
 	    }
 
-	    Mat dR, dT;
+	    Mat_<double> dR(3,3);
+	    Mat_<double> dT(3,1);
 
 	    if (first == true)
 	    {  	
-	        detectFeatures(prevImg, prevFeatures);
+	        detectFeatures(frame, prevFeatures);
+	        prevImg = frame.clone();
 		    processFrame(frame, prevImg, dR, dT);
+
 	        first = false;
 	    }
         else
@@ -158,16 +172,19 @@ class Camera
             processFrame(frame, prevImg, dR, dT);
         }
 
-	    if ((T.at<double>(2) > T.at<double>(1)) && (T.at<double>(2) > T.at<double>(0)))
+        
+	    if(1)//!(dT.at<double>(2) > dT.at<double>(1)) && (dT.at<double>(2) > dT.at<double>(0)))
 	    {
-	        T = T + speed * (R * dT);
+	        T = T + (speed * (R * dT));
 	    	R = dR * R;
 	    }
 	    else
 	        std::cout << "Invalid movement\n";
+	        	
 
+	    std::cout << T << "\n";
+	    std::cout << R << "\n";
 	}
-
 };
 
 void imuCallback(const sensor_msgs::Imu::ConstPtr& imu)
@@ -180,7 +197,7 @@ void imuCallback(const sensor_msgs::Imu::ConstPtr& imu)
     sy += ay;
     sz += az;
 
-    speed += sqrt(sx*sx+sy*sy+sz*sz);
+    speed = sqrt(sx*sx+sy*sy+sz*sz);
     //std::cout << speed << "\n";
 }
 
@@ -228,6 +245,7 @@ int main(int argc, char **argv)
 
     ros::NodeHandle nh;
 	ros::Publisher path_pub = nh.advertise<nav_msgs::Path>("/visual_odom_path", 10);
+	ros::Publisher pose_pub = nh.advertise<geometry_msgs::PoseStamped>("/visual_odom_pose", 10);
 	ros::Subscriber imu_sub = nh.subscribe("/imu/data", 10, imuCallback);
 	ros::Time time;	
 	nav_msgs::Path path;
@@ -245,16 +263,17 @@ int main(int argc, char **argv)
 		FAST(gray, keyPoints, FastConst, true);
 		drawKeypoints(gray, keyPoints, frame);
     	imshow("frane", frame);
-    	int key = waitKey(10);
-    	continue;
     	*/
 
     	//TODO: Draw circle to frame in order to indicate detected features on frame 
-    	//Mat frame;
-        cam.update(speed);
-        int key = waitKey(30);
-        continue;
-        //Draw features
+    	try
+    	{
+        	cam.update(speed);
+    	}
+        catch (int e)
+        {
+        	std::cout << "ERROR :(\n";
+        }
 
         //Construct and publish calculated data
 
@@ -270,27 +289,30 @@ int main(int argc, char **argv)
 	   	
 	   	// define required headers
 	    path.header.stamp = time;
-	 	path.header.frame_id = "vodom";
+	 	path.header.frame_id = "map";
 	    poseStamped.header.stamp = time;
-	 	poseStamped.header.frame_id = "vodom";
+	 	poseStamped.header.frame_id = "map";
 	 	
 	 	// Fill pose
 	 	p.x = T.at<double>(0,0);
 	 	p.y = T.at<double>(1,0);
 	 	p.z = T.at<double>(2,0);
 	 	getQuaternion(R, q);
+
+	 	std::cout << q;
+
 	 	pose.position = p;
 	 	pose.orientation = q;
 
 	 	// fill pose for poseStamped
 	 	poseStamped.pose = pose;
+	 	pose_pub.publish(poseStamped);
 
-	 	// update path
-	 	path.poses.push_back(poseStamped);
+	 	// update and publish path
+	 	//path.poses.push_back(poseStamped);
+        //path_pub.publish(path);
 
-        path_pub.publish(path);
-
-        //int key = waitKey(10);     
+        int key = waitKey(1000);    
     }
 
 	return 0;
