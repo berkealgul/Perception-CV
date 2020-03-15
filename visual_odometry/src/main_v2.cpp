@@ -27,19 +27,19 @@ Point2d pp;
 Mat_<double> mtx(3,3);
 Mat_<double> dist(1,5);
 
-void detectFeatures(Mat *inputImg, std::vector<Point2f> &points)
+void detectFeatures(Mat inputImg, vector<Point2f> &points)
 {
 	std::vector<KeyPoint> keyPoints;
-	FAST(*inputImg, keyPoints, FastConst, true);
+	FAST(inputImg, keyPoints, FastConst, true);
 
-	//ileriki aþama için "keypoint" türü "point2f" türüne dönüþtürülmeli,
-	KeyPoint::convert(keyPoints, points, std::vector<int>());
+	//ileriki asama için "keypoint" türü "point2f" türüne dönüþtürülmeli,
+	KeyPoint::convert(keyPoints, points, vector<int>());
 }
 
-void tractFeatures(Mat *prevImg, std::vector<Point2f> &prevPts, Mat *currImg, std::vector<Point2f> &currPts, std::vector<uchar> &status)
+void tractFeatures(Mat prevImg, vector<Point2f> &prevPts, Mat currImg, vector<Point2f> &currPts, vector<uchar> &status)
 {
 	std::vector<float> err;
-	calcOpticalFlowPyrLK(*prevImg, *currImg, prevPts, currPts, status, err, Size(21, 21), 3, termCrit, 0, 0.001);
+	calcOpticalFlowPyrLK(prevImg, currImg, prevPts, currPts, status, err, Size(21, 21), 3, termCrit, 0, 0.001);
 
 	//hatalý eþleþmelerden kurtulur lakin
 	//bu kýsým bana gizemli geldi o yüzden ayrýntýlar ile ilgili bir þey diyemeyeceðim
@@ -58,32 +58,32 @@ void tractFeatures(Mat *prevImg, std::vector<Point2f> &prevPts, Mat *currImg, st
 	}
 }
 
-void processFrame(Mat *frame, Mat *prevImg, Mat *R, Mat*T, std::vector<Point2f> &prevFeatures)
+void processFrame(Mat frame, Mat prevImg, Mat R, Mat T, vector<Point2f> &prevFeatures)
 {
 	Mat currImg, currG;
 	//alýnan resmi siyah-beyaz formata dönüþtür
-	cvtColor(*frame, currG, COLOR_BGR2GRAY);
+	cvtColor(frame, currG, COLOR_BGR2GRAY);
 	undistort(currG, currImg, mtx, dist);
 
-	std::vector<Point2f> currFeatures;
-	std::vector<uchar>status;
+	vector<Point2f> currFeatures;
+	vector<uchar>status;
 
 	Mat mask;
 
-	tractFeatures(prevImg, prevFeatures, &currImg, currFeatures, status);
+	tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
 	
 	Mat E = findEssentialMat(currFeatures, prevFeatures, focal, pp, RANSAC, 0.999, 1.0, mask);
-	recoverPose(E, currFeatures, prevFeatures, *R, *T, focal, pp, mask);
+	recoverPose(E, currFeatures, prevFeatures, R, T, focal, pp, mask);
 
 	//zaman geçtikçe özellik sayýsý düþecektir
 	//eðer özellik sayýsý belli bir sýnrýn altýna düþer ise tekrardan arama yapacaðýz
 	if (prevFeatures.size() < MIN_FEAS)
 	{
 		detectFeatures(prevImg, prevFeatures);
-		tractFeatures(prevImg, prevFeatures, &currImg, currFeatures, status);
+		tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
 	}
 	
-	*prevImg = currImg.clone();
+	prevImg = currImg.clone();
 	prevFeatures = currFeatures;
 }
 
@@ -133,7 +133,7 @@ void imuCallback(const sensor_msgs::Imu::ConstPtr& imu)
 
 int main(int argc, char **argv)
 {
-	ros::init(argc, argv, "visual_odometry_v1");
+	ros::init(argc, argv, "visual_odometry_v2");
     dist << 0.020436355102596344, -0.11407839179793304, 0.004229887050454093, -0.01709654130034178, 0.13991605472148272;
     mtx << 627.2839475395182, 0.0, 295.0153571445745,
            0.0, 630.6046803340988, 237.10098847214766,
@@ -157,7 +157,7 @@ int main(int argc, char **argv)
 	Mat traj = Mat::zeros(600, 600, CV_8UC3);
 
 	Mat prevImg;
-	std::vector<Point2f> prevFeatures;
+	vector<Point2f> prevFeatures;
 
 
 	//döngüye girmeden tanımlama işlemleri yapılmalı
@@ -179,8 +179,8 @@ int main(int argc, char **argv)
 	cvtColor(img, imgG, COLOR_BGR2GRAY);
 	undistort(imgG, prevImg, mtx, dist);
 
-	detectFeatures(&prevImg, prevFeatures);
-	processFrame(&img2, &prevImg, &R, &T, prevFeatures);
+	detectFeatures(prevImg, prevFeatures);
+	processFrame(img2, prevImg, R, T, prevFeatures);
 
 	T_f = T.clone();
 	R_f = R.clone();
@@ -201,18 +201,18 @@ int main(int argc, char **argv)
 		cap.read(frame);
 
 		//odometry algoritması devreye girer
-		processFrame(&frame, &prevImg, &R, &T, prevFeatures);
+		processFrame(frame, prevImg, R, T, prevFeatures);
 
 		//eğer geçerli bir hareket elde ediyor isek ve hareket boyutu düşük değilse
 		//kameranın mutlak konum ve rotasyonu hesapla
-		if ((scale > 0.1) &&(T.at<double>(2) > T.at<double>(1)) && (T.at<double>(2) > T.at<double>(0)))
+		if ((speed > 0.1) &&(T.at<double>(2) > T.at<double>(1)) && (T.at<double>(2) > T.at<double>(0)))
 		{
-			T_f = T_f + scale * (R_f * T);
+			T_f = T_f + speed * (R_f * T);
 			R_f = R * R_f;
 		}
 		else
 		{
-			std::cout << "GECERSIZ HAREKET \n";
+			cout << "GECERSIZ HAREKET \n";
 			continue;
 		}
 		
@@ -257,9 +257,9 @@ int main(int argc, char **argv)
 		//resimleri göster
 		imshow("video", frame);
 
-		std::cout << T_f << std::endl;
-		std::cout << prevFeatures.size();
-		std::cout << "\n\n";    
+		cout << T_f << std::endl;
+		cout << prevFeatures.size();
+		cout << "\n\n";    
 
 		if (waitKey(1) == 27) //27 == esc
 			break;
