@@ -27,109 +27,16 @@ Point2d pp;
 Mat_<double> mtx(3,3);
 Mat_<double> dist(1,5);
 
-void detectFeatures(Mat inputImg, vector<Point2f> &points)
-{
-	std::vector<KeyPoint> keyPoints;
-	FAST(inputImg, keyPoints, FastConst, true);
+void detectFeatures(Mat inputImg, vector<Point2f> &points);
 
-	//ileriki asama için "keypoint" türü "point2f" türüne dönüþtürülmeli,
-	KeyPoint::convert(keyPoints, points, vector<int>());
-}
+void tractFeatures(Mat prevImg, vector<Point2f> &prevPts, Mat currImg, vector<Point2f> &currPts, vector<uchar> &status);
 
-void tractFeatures(Mat prevImg, vector<Point2f> &prevPts, Mat currImg, vector<Point2f> &currPts, vector<uchar> &status)
-{
-	std::vector<float> err;
-	calcOpticalFlowPyrLK(prevImg, currImg, prevPts, currPts, status, err, Size(21, 21), 3, termCrit, 0, 0.001);
+void processFrame(Mat frame, Mat prevImg, Mat R, Mat T, vector<Point2f> &prevFeatures);
 
-	//hatalý eþleþmelerden kurtulur lakin
-	//bu kýsým bana gizemli geldi o yüzden ayrýntýlar ile ilgili bir þey diyemeyeceðim
-	int indexCorrection = 0;
-	for (int i = 0; i < status.size(); i++)
-	{
-		Point2f pt = currPts.at(i - indexCorrection);
-		if ((status.at(i) == 0) || (pt.x < 0) || (pt.y < 0)) {
-			if ((pt.x < 0) || (pt.y < 0)) {
-				status.at(i) = 0;
-			}
-			currPts.erase(currPts.begin() + (i - indexCorrection));
-			prevPts.erase(prevPts.begin() + (i - indexCorrection));
-			indexCorrection++;
-		}
-	}
-}
+void getQuaternion(Mat R, double Q[]);
 
-void processFrame(Mat frame, Mat prevImg, Mat R, Mat T, vector<Point2f> &prevFeatures)
-{
-	Mat currImg, currG;
-	//alýnan resmi siyah-beyaz formata dönüþtür
-	cvtColor(frame, currG, COLOR_BGR2GRAY);
-	undistort(currG, currImg, mtx, dist);
+void imuCallback(const sensor_msgs::Imu::ConstPtr& imu);
 
-	vector<Point2f> currFeatures;
-	vector<uchar>status;
-
-	Mat mask;
-
-	tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
-	
-	Mat E = findEssentialMat(currFeatures, prevFeatures, focal, pp, RANSAC, 0.999, 1.0, mask);
-	recoverPose(E, currFeatures, prevFeatures, R, T, focal, pp, mask);
-
-	//zaman geçtikçe özellik sayýsý düþecektir
-	//eðer özellik sayýsý belli bir sýnrýn altýna düþer ise tekrardan arama yapacaðýz
-	if (prevFeatures.size() < MIN_FEAS)
-	{
-		detectFeatures(prevImg, prevFeatures);
-		tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
-	}
-	
-	prevImg = currImg.clone();
-	prevFeatures = currFeatures;
-}
-
-void getQuaternion(Mat R, double Q[])
-{
-    double trace = R.at<double>(0,0) + R.at<double>(1,1) + R.at<double>(2,2);
- 
-    if (trace > 0.0) 
-    {
-        double s = sqrt(trace + 1.0);
-        Q[3] = (s * 0.5);
-        s = 0.5 / s;
-        Q[0] = ((R.at<double>(2,1) - R.at<double>(1,2)) * s);
-        Q[1] = ((R.at<double>(0,2) - R.at<double>(2,0)) * s);
-        Q[2] = ((R.at<double>(1,0) - R.at<double>(0,1)) * s);
-    } 
-    
-    else 
-    {
-        int i = R.at<double>(0,0) < R.at<double>(1,1) ? (R.at<double>(1,1) < R.at<double>(2,2) ? 2 : 1) : (R.at<double>(0,0) < R.at<double>(2,2) ? 2 : 0); 
-        int j = (i + 1) % 3;  
-        int k = (i + 2) % 3;
-
-        double s = sqrt(R.at<double>(i, i) - R.at<double>(j,j) - R.at<double>(k,k) + 1.0);
-        Q[0] = s * 0.5;
-        s = 0.5 / s;
-
-        Q[3] = (R.at<double>(k,j) - R.at<double>(j,k)) * s;
-        Q[2] = (R.at<double>(j,i) + R.at<double>(i,j)) * s;
-        Q[1] = (R.at<double>(k,i) + R.at<double>(i,k)) * s;
-    }
-}
-
-void imuCallback(const sensor_msgs::Imu::ConstPtr& imu)
-{
-    float ax = imu->linear_acceleration.x;
-    float ay = imu->linear_acceleration.y;
-    float az = imu->linear_acceleration.z;
-
-    sx += ax;
-    sy += ay;
-    sz += az;
-
-    speed = sqrt(sx*sx+sy*sy+sz*sz);
-    //std::cout << speed << "\n";
-}
 
 int main(int argc, char **argv)
 {
@@ -138,7 +45,6 @@ int main(int argc, char **argv)
     mtx << 627.2839475395182, 0.0, 295.0153571445745,
            0.0, 630.6046803340988, 237.10098847214766,
            0.0, 0.0, 1.0;
-
 
     ros::NodeHandle nh;
 	ros::Publisher path_pub = nh.advertise<nav_msgs::Path>("/visual_odom_path", 10);
@@ -266,4 +172,109 @@ int main(int argc, char **argv)
 	}
 
 	return 0;
+}
+
+
+void detectFeatures(Mat inputImg, vector<Point2f> &points)
+{
+	std::vector<KeyPoint> keyPoints;
+	FAST(inputImg, keyPoints, FastConst, true);
+
+	//ileriki asama için "keypoint" türü "point2f" türüne dönüþtürülmeli,
+	KeyPoint::convert(keyPoints, points, vector<int>());
+}
+
+void tractFeatures(Mat prevImg, vector<Point2f> &prevPts, Mat currImg, vector<Point2f> &currPts, vector<uchar> &status)
+{
+	std::vector<float> err;
+	calcOpticalFlowPyrLK(prevImg, currImg, prevPts, currPts, status, err, Size(21, 21), 3, termCrit, 0, 0.001);
+
+	//hatalý eþleþmelerden kurtulur lakin
+	//bu kýsým bana gizemli geldi o yüzden ayrýntýlar ile ilgili bir þey diyemeyeceðim
+	int indexCorrection = 0;
+	for (int i = 0; i < status.size(); i++)
+	{
+		Point2f pt = currPts.at(i - indexCorrection);
+		if ((status.at(i) == 0) || (pt.x < 0) || (pt.y < 0)) {
+			if ((pt.x < 0) || (pt.y < 0)) {
+				status.at(i) = 0;
+			}
+			currPts.erase(currPts.begin() + (i - indexCorrection));
+			prevPts.erase(prevPts.begin() + (i - indexCorrection));
+			indexCorrection++;
+		}
+	}
+}
+
+void processFrame(Mat frame, Mat prevImg, Mat R, Mat T, vector<Point2f> &prevFeatures)
+{
+	Mat currImg, currG;
+	//alýnan resmi siyah-beyaz formata dönüþtür
+	cvtColor(frame, currG, COLOR_BGR2GRAY);
+	undistort(currG, currImg, mtx, dist);
+
+	vector<Point2f> currFeatures;
+	vector<uchar>status;
+
+	Mat mask;
+
+	tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
+	
+	Mat E = findEssentialMat(currFeatures, prevFeatures, focal, pp, RANSAC, 0.999, 1.0, mask);
+	recoverPose(E, currFeatures, prevFeatures, R, T, focal, pp, mask);
+
+	//zaman geçtikçe özellik sayýsý düþecektir
+	//eðer özellik sayýsý belli bir sýnrýn altýna düþer ise tekrardan arama yapacaðýz
+	if (prevFeatures.size() < MIN_FEAS)
+	{
+		detectFeatures(prevImg, prevFeatures);
+		tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
+	}
+	
+	prevImg = currImg.clone();
+	prevFeatures = currFeatures;
+}
+
+void getQuaternion(Mat R, double Q[])
+{
+    double trace = R.at<double>(0,0) + R.at<double>(1,1) + R.at<double>(2,2);
+ 
+    if (trace > 0.0) 
+    {
+        double s = sqrt(trace + 1.0);
+        Q[3] = (s * 0.5);
+        s = 0.5 / s;
+        Q[0] = ((R.at<double>(2,1) - R.at<double>(1,2)) * s);
+        Q[1] = ((R.at<double>(0,2) - R.at<double>(2,0)) * s);
+        Q[2] = ((R.at<double>(1,0) - R.at<double>(0,1)) * s);
+    } 
+    
+    else 
+    {
+        int i = R.at<double>(0,0) < R.at<double>(1,1) ? (R.at<double>(1,1) < R.at<double>(2,2) ? 2 : 1) : (R.at<double>(0,0) < R.at<double>(2,2) ? 2 : 0); 
+        int j = (i + 1) % 3;  
+        int k = (i + 2) % 3;
+
+        double s = sqrt(R.at<double>(i, i) - R.at<double>(j,j) - R.at<double>(k,k) + 1.0);
+        Q[0] = s * 0.5;
+        s = 0.5 / s;
+
+        Q[3] = (R.at<double>(k,j) - R.at<double>(j,k)) * s;
+        Q[2] = (R.at<double>(j,i) + R.at<double>(i,j)) * s;
+        Q[1] = (R.at<double>(k,i) + R.at<double>(i,k)) * s;
+    }
+}
+
+void imuCallback(const sensor_msgs::Imu::ConstPtr& imu)
+{
+    float ax = imu->linear_acceleration.x;
+    float ay = imu->linear_acceleration.y;
+    float az = imu->linear_acceleration.z;
+
+    sx += ax;
+    sy += ay;
+    sz += az;
+
+    speed = sqrt(sx*sx+sy*sy+sz*sz);
+    //std::cout << speed << "\n";
 }
