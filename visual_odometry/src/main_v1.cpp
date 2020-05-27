@@ -1,319 +1,185 @@
-#include <iostream>
+#include<iostream>
 #include <math.h>
 #include <vector>
 #include <opencv2/opencv.hpp>
-#include <ros/ros.h>
-#include <sensor_msgs/Imu.h>
-#include <geometry_msgs/Pose.h>
-#include <geometry_msgs/PoseStamped.h>
-#include <geometry_msgs/Quaternion.h>
-#include <nav_msgs/Path.h>
 
 using namespace cv;
 using namespace std;
 
-#define MIN_FEAS 1000
+#define MIN_FEAS 200
 #define FastConst 30
+#define termCrit TermCriteria(TermCriteria::COUNT+TermCriteria::EPS, 30, 0.01)
 
+float focal;
+float speed = 0.01; //Speed of the camera
 
-// TODO : Consider speed's position in code
-float speed = 1; //Speed of the camera
-float sx = 0;
-float sy = 0;
-float sz = 0;
+Point2d pp;
 
+void detectFeatures(Mat inputImg, vector<Point2f> &points);
 
-class Camera
-{
- public:
-	//TermiCriteria termCrit TermCriteria::TermCriteria(TermCriteria::COUNT+TermCriteria::EPS, 30, 0.01);
-	Point2d pp;
-	VideoCapture cap;
-	Mat prevImg, dist, mtx;
-	std::vector<Point2f> prevFeatures;
-	float focal;
-	bool first;
-	Mat getFrame()
-	{
-	    Mat rawFrame, grayFrame, finalFrame;
+void tractFeatures(Mat prevImg, vector<Point2f> &prevPts, Mat currImg, vector<Point2f> &currPts, vector<uchar> &status);
 
-	    cap.read(rawFrame);
-	    cvtColor(rawFrame, grayFrame, COLOR_BGR2GRAY);
-	    undistort(grayFrame, finalFrame, mtx, dist);
+void processFrame(Mat frame, Mat prevImg, Mat R, Mat T, vector<Point2f> &prevFeatures);
 
-	    return finalFrame;
-	}
-
-	void processFrame(Mat currImg, Mat prevImg, Mat R, Mat T)
-	{
-		std::vector<Point2f> currFeatures;
-		std::vector<uchar>status;
-
-		Mat mask;
-
-		tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
-
-		Mat E = findEssentialMat(currFeatures, prevFeatures, focal, pp, RANSAC, 0.999, 1.0, mask);
-		recoverPose(E, currFeatures, prevFeatures, R, T, focal, pp, mask);
-
-		if (prevFeatures.size() < MIN_FEAS)
-		{
-			std::cout << "LOW FEATURES!!\n";
-			detectFeatures(prevImg, prevFeatures);
-			tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
-		}
-
-		prevImg = currImg.clone();
-		prevFeatures = currFeatures;
-	}
-
-	void detectFeatures(Mat inputImg, std::vector<Point2f> &points)
-	{
-		std::vector<KeyPoint> keyPoints;
-		FAST(inputImg, keyPoints, FastConst, true);
-
-		//ileriki aþama için "keypoint" türü "point2f" türüne dönüþtürülmeli,
-		KeyPoint::convert(keyPoints, points, std::vector<int>());
-	}
-
-	void tractFeatures(Mat prevImg, std::vector<Point2f> &prevPts, Mat currImg, std::vector<Point2f> &currPts, std::vector<uchar> &status)
-	{
-		std::vector<float> err;
-		calcOpticalFlowPyrLK(prevImg, currImg, prevPts, currPts, status, err,
-            Size(21, 21), 3, TermCriteria(TermCriteria::COUNT+TermCriteria::EPS, 30, 0.01), 0, 0.001);
-
-		//hatalý eþleþmelerden kurtulur lakin
-		//bu kýsým bana gizemli geldi o yüzden ayrýntýlar ile ilgili bir þey diyemeyeceðim
-		int indexCorrection = 0;
-		for (int i = 0; i < status.size(); i++)
-		{
-			Point2f pt = currPts.at(i - indexCorrection);
-			if ((status.at(i) == 0) || (pt.x < 0) || (pt.y < 0)) {
-				if ((pt.x < 0) || (pt.y < 0)) {
-					status.at(i) = 0;
-				}
-				currPts.erase(currPts.begin() + (i - indexCorrection));
-				prevPts.erase(prevPts.begin() + (i - indexCorrection));
-				indexCorrection++;
-			}
-		}
-	}
-
-	void drawFeatures(Mat src)
-	{
-		for (int i = 0; i < prevFeatures.size(); ++i)
-        {	
-        	Point2f pf = prevFeatures[i];
-        	Point p(int(pf.x), int(pf.y));
-        	circle(src, p, 1, Scalar::all(-1));
-        }	
-	}
-
- //public:
-	Mat T, R;
-
-	Camera(Mat _mtx, Mat _dist)
-	{
-		R = Mat_<double>(3,3);
-	    T = Mat_<double>(3,1);
-
-	    cap.open(0);
-	    mtx = _mtx;
-	    dist = _dist;
-
-	    Mat frame;
-	    cap.read(frame);
-
-	    float w = frame.cols;
-	    float h = frame.rows;
-	    float fx = mtx.at<double>(0,0);
-	    float cx = mtx.at<double>(0,2);
-	    float cy = mtx.at<double>(1,2);
-
-	    pp = Point2d(cx, cy);
-	    focal = fx / w;
-
-	    first = true;
-	}
-
-	void update(float speed)
-	{	
-		// Check camera status before prosecure
-		if (!cap.isOpened())
-		{
-			std::cout << "Camera is not open!!!!\n";
-			return;
-		}
-
-        Mat frame = getFrame();
-
-        //TODO : refind features and draw them for demostration purposes
-		imshow("frame", frame);
-
-	    if(speed <= 0.1)
-	    {
-	        std::cout << "Low Speed: " << speed << "\n";
-	        return;
-	    }
-
-	    Mat_<double> dR(3,3);
-	    Mat_<double> dT(3,1);
-
-	    if (first == true)
-	    {  	
-	        detectFeatures(frame, prevFeatures);
-	        prevImg = frame.clone();
-		    processFrame(frame, prevImg, dR, dT);
-
-	        first = false;
-	    }
-        else
-        {
-            processFrame(frame, prevImg, dR, dT);
-        }
-
-        
-	    if(1)//!(dT.at<double>(2) > dT.at<double>(1)) && (dT.at<double>(2) > dT.at<double>(0)))
-	    {
-	        T = T + (speed * (R * dT));
-	    	R = dR * R;
-	    }
-	    else
-	        std::cout << "Invalid movement\n";
-	        	
-
-	    std::cout << T << "\n";
-	    std::cout << R << "\n";
-	}
-};
-
-void imuCallback(const sensor_msgs::Imu::ConstPtr& imu)
-{
-    float ax = imu->linear_acceleration.x;
-    float ay = imu->linear_acceleration.y;
-    float az = imu->linear_acceleration.z;
-
-    sx += ax;
-    sy += ay;
-    sz += az;
-
-    speed = sqrt(sx*sx+sy*sy+sz*sz);
-    //std::cout << speed << "\n";
-}
-
-void getQuaternion(Mat R, geometry_msgs::Quaternion Q)
-{
-    double trace = R.at<double>(0,0) + R.at<double>(1,1) + R.at<double>(2,2);
- 
-    if (trace > 0.0) 
-    {
-        double s = sqrt(trace + 1.0);
-        Q.w = (s * 0.5);
-        s = 0.5 / s;
-        Q.x = ((R.at<double>(2,1) - R.at<double>(1,2)) * s);
-        Q.y = ((R.at<double>(0,2) - R.at<double>(2,0)) * s);
-        Q.z = ((R.at<double>(1,0) - R.at<double>(0,1)) * s);
-    } 
-    
-    else 
-    {
-        int i = R.at<double>(0,0) < R.at<double>(1,1) ? (R.at<double>(1,1) < R.at<double>(2,2) ? 2 : 1) : (R.at<double>(0,0) < R.at<double>(2,2) ? 2 : 0); 
-        int j = (i + 1) % 3;  
-        int k = (i + 2) % 3;
-
-        double s = sqrt(R.at<double>(i, i) - R.at<double>(j,j) - R.at<double>(k,k) + 1.0);
-        Q.x = s * 0.5;
-        s = 0.5 / s;
-
-        Q.w = (R.at<double>(k,j) - R.at<double>(j,k)) * s;
-        Q.y = (R.at<double>(j,i) + R.at<double>(i,j)) * s;
-        Q.z = (R.at<double>(k,i) + R.at<double>(i,k)) * s;
-    }
-}
 
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "visual_odometry_v1");
+	std::cout << "maiin";
+	VideoCapture cap;
+	cap.open("/home/basestation/output.avi");
+	cap.set(CV_CAP_PROP_POS_FRAMES, 60);
 
-    Mat_<double> mtx(3,3);
-    Mat_<double> dist(1,5);
 
-    dist << 0.020436355102596344, -0.11407839179793304, 0.004229887050454093, -0.01709654130034178, 0.13991605472148272;
-    mtx << 627.2839475395182, 0.0, 295.0153571445745,
-           0.0, 630.6046803340988, 237.10098847214766,
-           0.0, 0.0, 1.0;
+	std::cout << "entered";
 
-    ros::NodeHandle nh;
-	ros::Publisher path_pub = nh.advertise<nav_msgs::Path>("/visual_odom_path", 10);
-	ros::Publisher pose_pub = nh.advertise<geometry_msgs::PoseStamped>("/visual_odom_pose", 10);
-	ros::Subscriber imu_sub = nh.subscribe("/imu/data", 10, imuCallback);
-	ros::Time time;	
-	nav_msgs::Path path;
+	if (!cap.isOpened())
+	{
+		std::cout << "Camera is not open!!!!\n";
+		return 0;
+	}
 
-    Camera cam(mtx, dist);
+	Mat T_f, R_f; //kameranın güncel konum ve rotasyon matrisi
+	Mat R, T; //kameranın anlık değişen konum ve rotasyonu
 
-    while (ros::ok())
-    {
-    	ros::spinOnce();
-    	/*
-    	Mat frame, gray;
-    	cap.read(frame);
-    	std::vector<KeyPoint> keyPoints;
-    	cvtColor(frame, gray, COLOR_BGR2GRAY);
-		FAST(gray, keyPoints, FastConst, true);
-		drawKeypoints(gray, keyPoints, frame);
-    	imshow("frane", frame);
-    	*/
+	//yörüngeyi gösterecek resim
+	Mat traj = Mat::zeros(600, 600, CV_8UC3);
 
-    	//TODO: Draw circle to frame in order to indicate detected features on frame 
-    	try
-    	{
-        	cam.update(speed);
-    	}
-        catch (int e)
-        {
-        	std::cout << "ERROR :(\n";
-        }
+	Mat prevImg;
+	vector<Point2f> prevFeatures;	
 
-        //Construct and publish calculated data
+	Mat img, img2;
 
-        time = ros::Time::now();
+	cap.read(img);
+	cap.read(img2);
 
-        geometry_msgs::Pose pose;
-        geometry_msgs::PoseStamped poseStamped;
-        geometry_msgs::Quaternion q;
-        geometry_msgs::Point p;
+	float w = img.cols;
+	float h = img.rows;
 
-	    Mat T = cam.T;
-	    Mat R = cam.R;
-	   	
-	   	// define required headers
-	    path.header.stamp = time;
-	 	path.header.frame_id = "map";
-	    poseStamped.header.stamp = time;
-	 	poseStamped.header.frame_id = "map";
-	 	
-	 	// Fill pose
-	 	p.x = T.at<double>(0,0);
-	 	p.y = T.at<double>(1,0);
-	 	p.z = T.at<double>(2,0);
-	 	getQuaternion(R, q);
+	float cx = w/2;
+	float cy = h/2;
 
-	 	std::cout << q;
+	pp = Point2d(cx, cy);
+	focal = 14.8;
 
-	 	pose.position = p;
-	 	pose.orientation = q;
+	cvtColor(img, prevImg, COLOR_BGR2GRAY);
+	
+	detectFeatures(prevImg, prevFeatures);
+	processFrame(img2, prevImg, R, T, prevFeatures);
 
-	 	// fill pose for poseStamped
-	 	poseStamped.pose = pose;
-	 	pose_pub.publish(poseStamped);
+	T_f = T.clone();
+	R_f = R.clone();
 
-	 	// update and publish path
-	 	//path.poses.push_back(poseStamped);
-        //path_pub.publish(path);
+	int done_frames = 0;
 
-        int key = waitKey(1000);    
-    }
+	std::cout << "Began";
+
+	while(1)
+	{
+		if (!cap.isOpened())
+		{
+			std::cout << "Camera is not open!!!!\n";
+			break;
+		}
+
+		/*
+		done_frames++;
+		if(done_frames % 2 != 0)
+			continue;
+		*/
+
+		Mat frame;
+		cap.read(frame);
+
+		//odometry algoritması devreye girer
+		processFrame(frame, prevImg, R, T, prevFeatures);
+
+		if (waitKey(10) == 27) //27 == esc
+			break;
+
+		imshow("video", frame);
+		imshow("traj", traj);
+
+		if (1)//((speed > 0) &&(T.at<double>(2) > T.at<double>(1)) && (T.at<double>(2) > T.at<double>(0)))
+		{
+			T_f = T_f + speed * (R_f * T);
+			R_f = R * R_f;
+		}
+		else
+		{
+			cout << "GECERSIZ HAREKET \n";
+			continue;
+		}
+
+		int x = int(T_f.at<double>(0)) + 300;
+		int y = int(T_f.at<double>(2)) + 100;
+		circle(traj, Point(x, y), 1, CV_RGB(255, 0, 0), 2);
+	}
 
 	return 0;
+}
+
+
+void detectFeatures(Mat inputImg, vector<Point2f> &points)
+{
+	std::vector<KeyPoint> keyPoints;
+	FAST(inputImg, keyPoints, FastConst, true);
+
+	//ileriki asama için "keypoint" türü "point2f" türüne dönüþtürülmeli,
+	KeyPoint::convert(keyPoints, points, vector<int>());
+}
+
+void tractFeatures(Mat prevImg, vector<Point2f> &prevPts, Mat currImg, vector<Point2f> &currPts, vector<uchar> &status)
+{
+	std::vector<float> err;
+	
+	calcOpticalFlowPyrLK(prevImg, currImg, prevPts, currPts, status, err, Size(21, 21), 3, termCrit, 0, 0.001);
+
+	int indexCorrection = 0;
+	for (int i = 0; i < status.size(); i++)
+	{
+		Point2f pt = currPts.at(i - indexCorrection);
+		if ((status.at(i) == 0) || (pt.x < 0) || (pt.y < 0)) {
+			if ((pt.x < 0) || (pt.y < 0)) {
+				status.at(i) = 0;
+			}
+			currPts.erase(currPts.begin() + (i - indexCorrection));
+			prevPts.erase(prevPts.begin() + (i - indexCorrection));
+			indexCorrection++;
+		}
+	}
+}
+
+void processFrame(Mat frame, Mat prevImg, Mat R, Mat T, vector<Point2f> &prevFeatures)
+{
+	Mat currImg, currG;
+	//alýnan resmi siyah-beyaz formata dönüþtür
+	cvtColor(frame, currImg, COLOR_BGR2GRAY);
+	//undistort(currG, currImg, mtx, dist);
+
+	vector<Point2f> currFeatures;
+	vector<uchar>status;
+
+	for (auto& p : prevFeatures)
+	{
+		circle(frame, p, 2, Scalar(0, 0, 255), 1, 8);
+	}
+
+	std::cout << prevFeatures.size();
+
+	Mat mask;
+	tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
+	
+	Mat E = findEssentialMat(currFeatures, prevFeatures, focal, pp, RANSAC, 0.999, 1.0, mask);
+	recoverPose(E, currFeatures, prevFeatures, R, T, focal, pp, mask);
+
+	//zaman geçtikçe özellik sayýsý düþecektir
+	//eðer özellik sayýsý belli bir sýnrýn altýna düþer ise tekrardan arama yapacaðýz
+	if (prevFeatures.size() < MIN_FEAS)
+	{
+		detectFeatures(prevImg, prevFeatures);
+		tractFeatures(prevImg, prevFeatures, currImg, currFeatures, status);
+	}
+
+	prevImg = currImg.clone();
+	prevFeatures = currFeatures;
 }
