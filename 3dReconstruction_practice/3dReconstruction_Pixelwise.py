@@ -75,9 +75,9 @@ def createPointCloudMsg(points, rgbs):
 		pc_msg.points.append(_p)
 
 		rgb = rgbs[i]
-		r = rgb[0]
-		g = rgb[1]
-		b = rgb[2]
+		r = abs(rgb[2]-255)
+		g = abs(rgb[1]-255)
+		b = abs(rgb[0]-255)
 
 		r_c.values.append(r)
 		g_c.values.append(g)
